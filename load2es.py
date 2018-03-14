@@ -1,43 +1,58 @@
 import argparse
-import codecs
 import gzip
 import json
 import logging
 import time
+import codecs
 from functools import partial
 from itertools import islice
 from multiprocessing.dummy import Pool
 from tempfile import NamedTemporaryFile
-
-from elasticsearch import Elasticsearch
+from fnmatch import fnmatch
+import warnings
+from elasticsearch import Elasticsearch, RequestsHttpConnection
 from elasticsearch.helpers import streaming_bulk, parallel_bulk
 from google.cloud import storage
 from tqdm import tqdm
+
+warnings.filterwarnings('ignore')
 
 
 '''
 tmux new-session "python load2es.py publication --es http://myes:9200"
 '''
 
-cache_file = '/tmp/load2es_cache.json'
-INDEX_NAME = 'pubmed-18'
-DOC_TYPE = 'publication'
+# load the pubmed ids for chembl:
+fname = 'chembl23_pubmed_ids.csv'
+chembl_pubmed_ids_file = open(fname, 'r')
+chembl_pubmed_ids = chembl_pubmed_ids_file.read().split('\n')
+chembl_pubmed_ids_dict = {}
+for id in chembl_pubmed_ids:
+    chembl_pubmed_ids_dict[id.strip()] = True
+
+#print(chembl_pubmed_ids)
+#print(chembl_pubmed_ids_dict)
+#exit()
+
+# cache_file = '/tmp/load2es_cache.json'
+# INDEX_NAME = 'pubmed-18'
+# DOC_TYPE = 'publication'
 
 index_config = {
     'bioentity':
-        dict(path='_bioentities.json.gz',
+        dict(path='pubmed18-*-of-03935_bioentities.json.gz',
              index='pubmed-18-bioentity',
              doc_type='bioentity',
              mappings=None,
              pub_id = True),
     'taggedtext':
-        dict(path='_taggedtext.json.gz',
+        dict(path='pubmed18-*-of-03935_taggedtext.json.gz',
              index='pubmed-18-taggedtext',
              doc_type='taggedtext',
              mappings=None,
              pub_id = True),
     'publication':
-        dict(path='_small.json.gz',
+        dict(path='pubmed18-*-of-03935_small.json.gz',
              index='pubmed-18',
              doc_type='publication',
              mappings='publication.json',
@@ -45,7 +60,7 @@ index_config = {
              pub_id = True
              ),
     'concept':
-        dict(path='_concepts.json.gz',
+        dict(path='pubmed18-*-of-03935_concepts.json.gz',
              index='pubmed-18-concept',
              doc_type='concept',
              mappings='concept.json',
@@ -53,7 +68,9 @@ index_config = {
 
 }
 
-client = storage.Client(project='open-targets')
+#client = storage.Client(project='open-targets')
+client = storage.Client(project='siren-pubmed')
+#client = storage.Client()
 bucket = client.get_bucket('medline-json')
 
 '''
@@ -71,7 +88,27 @@ def grouper(iterable, size):
     return iter(lambda: list(islice(iterable, size)), [])
 
 
-def read_remote_file(index_, doc_type, file_name, use_pub_id = True):
+def get_next_record(reader):
+    rec_ok = False
+    rec = ''
+    while not rec_ok:
+        line = reader.next()
+        if not line:
+            yield None
+        rec = "".join([rec, line])
+        try:
+            line_json = json.loads(rec)
+            yield(rec, line_json)
+            rec = ''
+        except Exception:
+            rec = rec + ' '
+            pass
+
+
+def read_remote_file(index_, doc_type, file_name, malformed, use_pub_id = True):
+    malformed[file_name] = 0
+    in_chembl = 0
+    logging.info(file_name)
     counter = 0
     while counter <= 3:  # retry 3 times
         counter += 1
@@ -84,37 +121,63 @@ def read_remote_file(index_, doc_type, file_name, use_pub_id = True):
                 zf = gzip.open(cache_file.name, 'rb')
                 reader = codecs.getreader("utf-8")
                 new_line = []
-                for line in reader(zf):
-                    new_line.append(line)
-                    if line[-1] == '\n':
-                        counter += 1
-                        if len(new_line) > 1:
-                            line_to_yield = ''.join(new_line)
-                        else:
-                            line_to_yield = line
-                        new_line = []
-                        # doc = json.loads(line)
-                        if line_to_yield:
-                            pub_id = line_to_yield.partition('"pub_id": "')[2].partition('"')[0]
-                            if not pub_id:
-                                logging.error('no pubmedid parsed for line %s' % line)
+
+                for (line, line_json) in get_next_record(reader(zf)):
+
+                #for line in reader(zf):
+                    # try:
+                    #     line_json = json.loads(line)
+                    # except Exception:
+                    #     malformed[file_name] += 1
+                    #     print(line)
+                        # exit()
+                        # lines = line.split("\n")
+                        # ll = ' '.join(lines)
+                        # logging.error(line)
+                        # logging.error(ll)
+
+                    # logging.error('comparing %s (type %s) with %s (type %s)' % (
+                    #     str(line_json["pub_id"]),
+                    #     type(str(line_json["pub_id"])),
+                    #     chembl_pubmed_ids_dict.keys()[1],
+                    #     type(chembl_pubmed_ids_dict.keys()[1])
+                    # ))
+                    # exit()
+                    # print(line_json["pub_id"])
+                    if str(line_json["pub_id"]) in chembl_pubmed_ids_dict:
+                        in_chembl += 1
+                        logging.error('ok %s' % str(in_chembl))
+                        #exit()
+                        new_line.append(line)
+                        if line[-1] == '\n':
+                            # counter += 1
+                            if len(new_line) > 1:
+                                line_to_yield = ''.join(new_line)
                             else:
-                                # print index_, doc_type, pub_id
-                                _id = None
-                                if use_pub_id and pub_id:
-                                    _id = pub_id
-                                    yield {
-                                        '_index': index_,
-                                        '_type': doc_type,
-                                        '_id': _id,
-                                        '_source': line_to_yield
-                                    }
+                                line_to_yield = line
+                            new_line = []
+                            # doc = json.loads(line)
+                            if line_to_yield:
+                                pub_id = line_to_yield.partition('"pub_id": "')[2].partition('"')[0]
+                                if not pub_id:
+                                    logging.error('no pubmedid parsed for line %s' % line)
                                 else:
-                                    yield {
-                                        '_index': index_,
-                                        '_type': doc_type,
-                                        '_source': line_to_yield
-                                    }
+                                    # print index_, doc_type, pub_id
+                                    _id = None
+                                    if use_pub_id and pub_id:
+                                        _id = pub_id
+                                        yield {
+                                            '_index': index_,
+                                            '_type': doc_type,
+                                            '_id': _id,
+                                            '_source': line_to_yield
+                                        }
+                                    else:
+                                        yield {
+                                            '_index': index_,
+                                            '_type': doc_type,
+                                            '_source': line_to_yield
+                                        }
                 break
         except Exception as e:
             logging.exception('could not get file %s: %s' % (file_name, e))
@@ -122,19 +185,24 @@ def read_remote_file(index_, doc_type, file_name, use_pub_id = True):
         if counter == 3:
             logging.error(' file %s skipped', file_name)
 
+        #logging.info('pubmed ids in chembl loaded: %s of %s' % (in_chembl, len(chembl_pubmed_ids)))
 
-def load_file(index_, doc_name, file_name):
-    return list(read_remote_file(index_, doc_name, file_name))
+
+# def load_file(index_, doc_name, file_name):
+#     return list(read_remote_file(index_, doc_name, file_name))
     # for line in read_remote_file(file_name, index_, doc_name):
     #     yield line
 
 
 def get_file_names(path):
-    client = storage.Client(project='open-targets')
+    #client = storage.Client(project='open-targets')
+    client = storage.Client(project='siren-pubmed')
+    #client = storage.Client()
     bucket = client.get_bucket('medline-json')
 
     for i in bucket.list_blobs(prefix='splitted/'):
-        if i.name.endswith(path):
+        #if i.name.endswith(path):
+        if fnmatch(i.name, ('splitted/'+path)):
             yield i.name
 
 
@@ -143,10 +211,14 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Process some integers.')
     parser.add_argument('indices', nargs='+',
                         help='indices to load')
-    parser.add_argument('--es', dest='es', action='append',
+    parser.add_argument('-es', dest='es', action='append',
                         default=[],
                         help='elasticsearch urls')
+    parser.add_argument('-username', default='demo', required=False)
+    parser.add_argument('-password', default='enterprise123#', required=False)
     args = parser.parse_args()
+
+    ES_AUTH = (args.username, args.password)
 
     p = Pool(4)
     valid_indices = list(set(args.indices) & set(index_config.keys()))
@@ -155,6 +227,11 @@ if __name__ == '__main__':
         hosts=args.es,
         max_retry=10,
         retry_on_timeout=True,
+
+        use_ssl=True,
+        verify_certs=False,
+        http_auth=ES_AUTH,
+        connection_class=RequestsHttpConnection
     )
     for idx in tqdm(valid_indices,
                     desc='loading indexes',
@@ -185,7 +262,7 @@ if __name__ == '__main__':
                                 body=temp_index_settings)
         success, failed = 0, 0
         '''get data'''
-        func = partial(load_file, index_data['index'], index_data['doc_type'])
+        # func = partial(load_file, index_data['index'], index_data['doc_type'])
 
         with tqdm(
                 desc='loading json for index %s' % index_data['index'],
@@ -193,15 +270,16 @@ if __name__ == '__main__':
                 unit_scale=True,
                 total=30000000 if 'concept' not in index_data['index'] else 570000000) as pbar:
             file_names = list(get_file_names(path=index_data['path']))
-            chunk_size = 1000
+            chunk_size = 10
             file_pbar = tqdm(file_names,
                                   desc='files processed',
                                   unit=' files',
                                   unit_scale=True)
-            for file_name in file_pbar:
-                loaded_rows = read_remote_file(index_data['index'], index_data['doc_type'], file_name, index_data['pub_id'])
-                counter = 0
+            malformed = {}
 
+            for file_name in file_pbar:
+                loaded_rows = read_remote_file(index_data['index'], index_data['doc_type'], file_name, malformed, index_data['pub_id'])
+                counter = 0
 
                 # for loaded_rows in tqdm(p.imap_unordered(func, get_file_names(path=index_data['path'])),
                 #                         desc='files processed',
@@ -214,8 +292,9 @@ if __name__ == '__main__':
                     counter = 0
                     try:
                         for ok, item in parallel_bulk(es,
-                                                    loaded_rows,
-                                                      raise_on_error=True,
+                                                    # loaded_rows,
+                                                    batchiter,
+                                                      raise_on_error=False,
                                                       chunk_size=chunk_size,
                                                       thread_count= threads,
                                                       request_timeout=300
@@ -234,7 +313,11 @@ if __name__ == '__main__':
                 if file_pbar.total%10==0:
                     es.indices.flush(index_data['index'])
                 #
-        tqdm.write("uploaded %i success, %i failed" % (success, failed))
+
+        malformed_all = 0
+        for f in malformed:
+            malformed_all += malformed[f]
+        tqdm.write("uploaded %i success, %i failed, %i malformed" % (success, failed, malformed_all))
 
         restore_index_settings = {
             "index": {
