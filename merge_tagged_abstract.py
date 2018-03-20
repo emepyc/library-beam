@@ -63,22 +63,23 @@ def generate_updates(es):
                          scroll='5m',
                          raise_on_error=True,
                          preserve_order=False,
-                         size=100,
+                         size=1000,
                          index=from_index):
             read_records += 1
             pbar.update(1)
             tagged_abstract = item['_source']['abstract']
             tagged_abstract_classes = from_element_to_class(tagged_abstract)
+            # print(tagged_abstract_classes)
             # tagged_abstract_classes_plus = from_entity_to_class(tagged_abstract_classes)
             doc_id = item['_id']
             doc_type = item['_type']
             action = {
                 '_op_type': 'update',
                 '_index': to_index,
-                '_type': doc_type,
+                '_type': 'publication',
                 '_id': doc_id,
                 'doc': {
-                    'abstract_tagged': tagged_abstract,
+                    'abstract_taggedtext': tagged_abstract_classes,
                 }
             }
             yield action
@@ -149,9 +150,12 @@ if __name__ == '__main__':
         for ok, item in streaming_bulk(es,
                                        generate_updates(es),
                                        raise_on_error=True,
-                                       chunk_size=1000,
+                                       chunk_size=10000,
                                        request_timeout=300):
             if not ok:
                 print('not ok')
-    except:
-        print("error")
+    except Exception as ex:
+        template = "An exception of type {0} occurred. Arguments:\n{1!r}"
+        message = template.format(type(ex).__name__, ex.args)
+        print(message)
+        print(message)
