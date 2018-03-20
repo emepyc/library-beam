@@ -1,6 +1,7 @@
 import argparse
 from tqdm import tqdm
 import json
+import time
 from elasticsearch import Elasticsearch, RequestsHttpConnection
 from elasticsearch.helpers import scan, streaming_bulk
 import re
@@ -79,7 +80,7 @@ def generate_updates(es):
                 '_type': 'publication',
                 '_id': doc_id,
                 'doc': {
-                    'abstract_taggedtext': tagged_abstract_classes,
+                    'abstract_tagged': tagged_abstract_classes,
                 }
             }
             yield action
@@ -146,6 +147,17 @@ if __name__ == '__main__':
     #                       }
     #                   })
 
+    time.sleep(3)
+    temp_index_settings = {
+        "index": {
+            "refresh_interval": "-1",
+            "number_of_replicas": 0,
+            "translog.durability": 'async',
+        }
+    }
+    es.indices.put_settings(index=to_index,
+                            body=temp_index_settings)
+
     try:
         for ok, item in streaming_bulk(es,
                                        generate_updates(es),
@@ -159,3 +171,13 @@ if __name__ == '__main__':
         message = template.format(type(ex).__name__, ex.args)
         print(message)
         print(message)
+
+    restore_index_settings = {
+        "index": {
+            "refresh_interval": "1s",
+            "number_of_replicas": 1,
+            "translog.durability": 'request',
+        }
+    }
+    es.indices.put_settings(index=to_index,
+                            body=restore_index_settings)

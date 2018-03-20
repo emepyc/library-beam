@@ -848,6 +848,10 @@
           "eager_global_ordinals": true,
           "fielddata": true
         },
+        "abstract_tagged": {
+          "type": "string",
+          "index": "no"
+        },
         "abstract_sentences": {
           "type": "nested",
           "properties": {
