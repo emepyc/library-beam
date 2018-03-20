@@ -14,6 +14,7 @@ from elasticsearch import Elasticsearch, RequestsHttpConnection
 from elasticsearch.helpers import streaming_bulk, parallel_bulk
 from google.cloud import storage
 from tqdm import tqdm
+from rope.base.codeanalyze import ChangeCollector
 
 warnings.filterwarnings('ignore')
 
@@ -77,6 +78,33 @@ bucket = client.get_bucket('medline-json')
 if the data cannot be accessed, make sure this was run
 gsutil iam -r ch allUsers:objectViewer gs://medline-json/
 '''
+
+def mark_tags_in_text(text, matches):
+    '''
+    produce a text with the tags written as markup
+    :param text: text to tags
+    :param matches: tags to encode
+    :return:
+    '''
+    text_to_tag = text
+    tagged_abstract = ''
+    if isinstance(text, unicode):
+        text_to_tag = text.encode('utf-8')
+    try:
+        tagged_abstract = ChangeCollector(text_to_tag)
+        for i, tag in enumerate(sorted(matches, key=lambda x:(x['start'], -x['end']))):
+            if isinstance(tag['reference'], (list, tuple)):
+                tag_reference = '|'.join(tag['reference'])
+            else:
+                tag_reference = tag['reference']
+            tagged_abstract.add_change(tag['start'], tag['start'],
+                                       '<mark-%s data-entity="%s" reference-db="%s"  reference="%s">' % (
+                                           str(i), tag['category'], tag['reference_db'], tag_reference))
+            tagged_abstract.add_change(tag['end'], tag['end'], '</mark-%s>' % str(i))
+        tagged_abstract = '<div  class="entities">%s</div></br>' % tagged_abstract.get_changed()
+    except UnicodeDecodeError:
+        logging.error('cannot generate maked text for unicode decode error')
+    return tagged_abstract
 
 
 def grouper(iterable, size):
@@ -144,6 +172,14 @@ def read_remote_file(index_, doc_type, file_name, malformed, use_pub_id = True):
                     # ))
                     # exit()
                     # print(line_json["pub_id"])
+                    # print(line_json)
+                    # print(line_json['abstract'])
+                    # t = line_json['abstract']
+                    # print(line_json['text_mined_entities']['nlp']['tagged_entities_grouped']['DISEASE|OPENTARGETS'])
+                    # m = line_json['text_mined_entities']['nlp']['tagged_entities_grouped']['DISEASE|OPENTARGETS']
+                    # tt = mark_tags_in_text(("abstract:    " + t), m)
+                    # print(tt)
+                    # exit(0)
                     if str(line_json["pub_id"]) in chembl_pubmed_ids_dict:
                         in_chembl += 1
                         logging.error('ok %s' % str(in_chembl))
@@ -270,7 +306,7 @@ if __name__ == '__main__':
                 unit_scale=True,
                 total=30000000 if 'concept' not in index_data['index'] else 570000000) as pbar:
             file_names = list(get_file_names(path=index_data['path']))
-            chunk_size = 10
+            chunk_size = 1000
             file_pbar = tqdm(file_names,
                                   desc='files processed',
                                   unit=' files',
