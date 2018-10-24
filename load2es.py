@@ -15,6 +15,8 @@ from elasticsearch.helpers import streaming_bulk, parallel_bulk
 from google.cloud import storage
 from tqdm import tqdm
 from rope.base.codeanalyze import ChangeCollector
+from os import listdir
+from os.path import isfile, join
 
 warnings.filterwarnings('ignore')
 
@@ -53,7 +55,7 @@ index_config = {
              mappings=None,
              pub_id = True),
     'publication':
-        dict(path='pubmed18-*-of-03935_small.json.gz',
+        dict(path='_enriched.json.gz',
              index='pubmed-18',
              doc_type='publication',
              mappings='publication.json',
@@ -69,10 +71,7 @@ index_config = {
 
 }
 
-#client = storage.Client(project='open-targets')
-client = storage.Client(project='siren-pubmed')
-#client = storage.Client()
-bucket = client.get_bucket('medline-json')
+
 
 '''
 if the data cannot be accessed, make sure this was run
@@ -133,7 +132,7 @@ def get_next_record(reader):
             pass
 
 
-def read_remote_file(index_, doc_type, file_name, malformed, use_pub_id = True):
+def read_remote_file(index_, doc_type, file_name, malformed, bucket=None, use_pub_id=True):
     malformed[file_name] = 0
     in_chembl = 0
     logging.info(file_name)
@@ -141,15 +140,19 @@ def read_remote_file(index_, doc_type, file_name, malformed, use_pub_id = True):
     while counter <= 3:  # retry 3 times
         counter += 1
         try:
-            with  NamedTemporaryFile() as cache_file:
-                blob = bucket.get_blob(file_name)
-                blob.chunk_size = 262144 * 4
-                blob.download_to_file(cache_file, )
-                cache_file.flush()
+            with NamedTemporaryFile(suffix='.gz') as cache_file:
+                if bucket is not None:
+                    blob = bucket.get_blob(file_name)
+                    blob.chunk_size = 262144 * 4
+                    blob.download_to_file(cache_file, )
+                    cache_file.flush()
+                else:
+                    with open(file_name, 'rb') as f:
+                        cache_file.write(f.read())
+                        cache_file.flush()
                 zf = gzip.open(cache_file.name, 'rb')
                 reader = codecs.getreader("utf-8")
                 new_line = []
-
                 for (line, line_json) in get_next_record(reader(zf)):
 
                 #for line in reader(zf):
@@ -184,36 +187,36 @@ def read_remote_file(index_, doc_type, file_name, malformed, use_pub_id = True):
                         in_chembl += 1
                         logging.error('ok %s' % str(in_chembl))
                         #exit()
-                        new_line.append(line)
-                        if line[-1] == '\n':
-                            # counter += 1
-                            if len(new_line) > 1:
-                                line_to_yield = ''.join(new_line)
+                    new_line.append(line)
+                    if line[-1] == '\n':
+                        # counter += 1
+                        if len(new_line) > 1:
+                            line_to_yield = ''.join(new_line)
+                        else:
+                            line_to_yield = line
+                        new_line = []
+                        # doc = json.loads(line)
+                        if line_to_yield:
+                            pub_id = line_to_yield.partition('"pub_id": "')[2].partition('"')[0]
+                            if not pub_id:
+                                logging.error('no pubmedid parsed for line %s' % line)
                             else:
-                                line_to_yield = line
-                            new_line = []
-                            # doc = json.loads(line)
-                            if line_to_yield:
-                                pub_id = line_to_yield.partition('"pub_id": "')[2].partition('"')[0]
-                                if not pub_id:
-                                    logging.error('no pubmedid parsed for line %s' % line)
+                                # print index_, doc_type, pub_id
+                                _id = None
+                                if use_pub_id and pub_id:
+                                    _id = pub_id
+                                    yield {
+                                        '_index': index_,
+                                        '_type': doc_type,
+                                        '_id': _id,
+                                        '_source': line_to_yield
+                                    }
                                 else:
-                                    # print index_, doc_type, pub_id
-                                    _id = None
-                                    if use_pub_id and pub_id:
-                                        _id = pub_id
-                                        yield {
-                                            '_index': index_,
-                                            '_type': doc_type,
-                                            '_id': _id,
-                                            '_source': line_to_yield
-                                        }
-                                    else:
-                                        yield {
-                                            '_index': index_,
-                                            '_type': doc_type,
-                                            '_source': line_to_yield
-                                        }
+                                    yield {
+                                        '_index': index_,
+                                        '_type': doc_type,
+                                        '_source': line_to_yield
+                                    }
                 break
         except Exception as e:
             logging.exception('could not get file %s: %s' % (file_name, e))
@@ -230,16 +233,19 @@ def read_remote_file(index_, doc_type, file_name, malformed, use_pub_id = True):
     #     yield line
 
 
-def get_file_names(path):
-    #client = storage.Client(project='open-targets')
-    client = storage.Client(project='siren-pubmed')
-    #client = storage.Client()
-    bucket = client.get_bucket('medline-json')
-
-    for i in bucket.list_blobs(prefix='splitted/'):
-        #if i.name.endswith(path):
-        if fnmatch(i.name, ('splitted/'+path)):
-            yield i.name
+def get_file_names(path, localdir=None):
+    if localdir is None:
+        client = storage.Client(project='siren-pubmed')
+        bucket = client.get_bucket('medline-json')
+        for i in bucket.list_blobs(prefix='splitted/'):
+            if fnmatch(i.name, ('splitted/'+path)):
+                yield i.name
+    else:
+        # path e.g. _bioentities.json.gz
+        for f in listdir(localdir):
+            filepath = join(localdir, f)
+            if isfile(filepath) and filepath.endswith(path):
+                yield filepath
 
 
 if __name__ == '__main__':
@@ -250,8 +256,9 @@ if __name__ == '__main__':
     parser.add_argument('-es', dest='es', action='append',
                         default=[],
                         help='elasticsearch urls')
-    parser.add_argument('-username', default='demo', required=False)
-    parser.add_argument('-password', default='enterprise123#', required=False)
+    parser.add_argument('-username', required=False)
+    parser.add_argument('-password',  required=False)
+    parser.add_argument('--localdir', dest='localdir', help='directory with local files')
     args = parser.parse_args()
 
     ES_AUTH = (args.username, args.password)
@@ -259,15 +266,23 @@ if __name__ == '__main__':
     p = Pool(4)
     valid_indices = list(set(args.indices) & set(index_config.keys()))
     logging.info('loading data for indices: ' + ', '.join(valid_indices))
-    es = Elasticsearch(
-        hosts=args.es,
-        max_retry=10,
-        retry_on_timeout=True,
 
-        use_ssl=True,
-        verify_certs=False,
-        http_auth=ES_AUTH,
-        connection_class=RequestsHttpConnection
+    esargs = {
+        'max_retry': 10,
+        'retry_on_timeout': True
+    }
+
+    if args.username and args.password:
+        esargs.update({
+            'use_ssl': True,
+            'verify_certs': False,
+            'http_auth': ES_AUTH,
+            'connection_class': RequestsHttpConnection
+        })
+    print args.es
+    es = Elasticsearch(
+        args.es,
+        **esargs
     )
     for idx in tqdm(valid_indices,
                     desc='loading indexes',
@@ -305,7 +320,10 @@ if __name__ == '__main__':
                 unit=' docs',
                 unit_scale=True,
                 total=30000000 if 'concept' not in index_data['index'] else 570000000) as pbar:
-            file_names = list(get_file_names(path=index_data['path']))
+            if args.localdir:
+                file_names = list(get_file_names(path=index_data['path'], localdir=args.localdir))
+            else:
+                file_names = list(get_file_names(path=index_data['path']))
             chunk_size = 1000
             file_pbar = tqdm(file_names,
                                   desc='files processed',
@@ -315,6 +333,12 @@ if __name__ == '__main__':
 
             for file_name in file_pbar:
                 loaded_rows = read_remote_file(index_data['index'], index_data['doc_type'], file_name, malformed, index_data['pub_id'])
+                if args.localdir:
+                    loaded_rows = read_remote_file(index_data['index'], index_data['doc_type'], file_name, malformed, use_pub_id =index_data['pub_id'])
+                else:
+                    client = storage.Client(project='open-targets')
+                    bucket = client.get_bucket('medline-json')
+                    loaded_rows = read_remote_file(index_data['index'], index_data['doc_type'], file_name, malformed, bucket=bucket , use_pub_id = index_data['pub_id'])
                 counter = 0
 
                 # for loaded_rows in tqdm(p.imap_unordered(func, get_file_names(path=index_data['path'])),
@@ -328,7 +352,6 @@ if __name__ == '__main__':
                     counter = 0
                     try:
                         for ok, item in parallel_bulk(es,
-                                                    # loaded_rows,
                                                     batchiter,
                                                       raise_on_error=False,
                                                       chunk_size=chunk_size,

@@ -809,9 +809,6 @@
   },
   "mappings": {
     "_default_": {
-      "_all": {
-        "enabled": true
-      },
       "dynamic_templates": [
         {
           "string_fields": {
@@ -826,9 +823,6 @@
       ]
     },
     "concept": {
-      "_all": {
-        "enabled": false
-      },
       "dynamic_templates": [
         {
           "string_fields": {

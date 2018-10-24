@@ -809,9 +809,6 @@
   },
   "mappings": {
     "_default_": {
-      "_all": {
-        "enabled": true
-      },
       "dynamic_templates": [
         {
           "string_fields": {
@@ -826,9 +823,6 @@
       ]
     },
     "publication": {
-      "_all": {
-        "enabled": true
-      },
       "dynamic_templates": [
         {
           "string_fields": {
@@ -849,8 +843,8 @@
           "fielddata": true
         },
         "abstract_tagged": {
-          "type": "string",
-          "index": "no"
+          "type": "text",
+          "index": false
         },
         "abstract_sentences": {
           "type": "nested",
@@ -1014,23 +1008,23 @@
               "type": "object",
               "properties": {
                 "tagged_text": {
-                  "type": "string",
-                  "index": "no"
+                  "type": "text",
+                  "index": false
                 },
                 "embedding_text": {
                   "type": "object",
                   "properties": {
                     "ent_tag": {
-                      "type": "string",
-                      "index": "no"
+                      "type": "text",
+                      "index": false
                     },
                     "plain": {
-                      "type": "string",
-                      "index": "no"
+                      "type": "text",
+                      "index": false
                     },
                     "pos_tag": {
-                      "type": "string",
-                      "index": "no"
+                      "type": "text",
+                      "index": false
                     }
                   }
                 }

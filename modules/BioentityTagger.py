@@ -243,9 +243,9 @@ class BioEntityTagger(object):
                 else:
                     tag_reference = tag['reference']
                 tagged_abstract.add_change(tag['start'], tag['start'],
-                                           '<mark-%s data-entity="%s" reference-db="%s"  reference="%s">' % (
+                                           '<span class="mark-%s" data-entity="%s" reference-db="%s"  reference="%s">' % (
                                                str(i), tag['category'], tag['reference_db'], tag_reference))
-                tagged_abstract.add_change(tag['end'], tag['end'], '</mark-%s>' % str(i))
+                tagged_abstract.add_change(tag['end'], tag['end'], '</span>')
             tagged_abstract = '<div  class="entities">%s</div></br>' % tagged_abstract.get_changed()
         except UnicodeDecodeError:
             logging.error('cannot generate maked text for unicode decode error')

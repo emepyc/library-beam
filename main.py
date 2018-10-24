@@ -723,6 +723,29 @@ class Consume(beam.DoFn):
     def process(self, element, *args, **kwargs):
         pass
 
+class ModifyEnrichedForLoad(beam.DoFn):
+    """
+    The document will not be split, and will be loaded
+    This step makes some adjustments to match docs we have in March 2018 pubmed-18
+    """
+    def process(self, element, *args, **kwargs):
+        try:
+            del element['text_mined_entities']['nlp']['embedding_text']
+        except KeyError:
+            pass
+        try:
+            element['text_mined_entities']['noun_phrases'] = element['text_mined_entities']['nlp']['noun_phrases']
+            del element['text_mined_entities']['nlp']['noun_phrases']
+        except KeyError:
+            pass
+        try:
+            element['abstract_tagged'] = element['text_mined_entities']['nlp']['tagged_text']
+            del element['text_mined_entities']['nlp']['tagged_text']
+        except KeyError:
+            pass
+        yield element
+
+
 
 def run(argv=None):
     """Main entry point; defines and runs the tfidf pipeline."""
@@ -745,6 +768,9 @@ def run(argv=None):
     parser.add_argument('--output_splitted',
                         required=False,
                         help='Output file to write results to.')
+    parser.add_argument('--enriched_for_load',
+                        action = 'store_true',
+                        help = 'output_enriched will be loaded directly, some additional modifications will be made')
     known_args, pipeline_args = parser.parse_known_args(argv)
     # bq_table_schema = parse_bq_json_schema(json.load(open('schemas/medline.papers.json')))
     bq_table_schema = parse_bq_json_schema(json.loads(BQ_SCHEMA))
@@ -778,6 +804,9 @@ def run(argv=None):
                 GetLatestVersion())
 
             enriched_articles = unique_medline_articles | 'NLPAnalysis' >> beam.ParDo(NLPAnalysis())
+
+            if known_args.enriched_for_load:
+                enriched_articles = enriched_articles | 'ModifyEnrichedForLoad' >> beam.ParDo(ModifyEnrichedForLoad())
 
             json_enriched_medline_articles = enriched_articles | 'EnrichedMedlineToJSON' >> beam.ParDo(ToJSON())
 
