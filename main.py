@@ -10,7 +10,6 @@ import apache_beam as beam
 import en_depent_web_md
 # import en_core_web_md
 import nltk
-import spacy
 from apache_beam.coders import coders
 # from apache_beam.examples.complete.game.user_score import WriteToBigQuery
 from apache_beam.io import Read, iobase, WriteToText, ReadFromText
@@ -23,11 +22,10 @@ from apache_beam.options.pipeline_options import PipelineOptions
 from apache_beam.options.pipeline_options import SetupOptions
 from dateutil.parser import parse
 from lxml import etree, objectify
-from spacy.language_data import TOKENIZER_INFIXES
-from spacy.tokenizer import Tokenizer
+
 
 from modules.BioentityTagger import BioEntityTagger
-from modules.NLP import NounChuncker, DocumentAnalysisSpacy
+from modules.NLP import NounChuncker, DocumentAnalysisSpacy, init_spacy_english_language
 
 MEDLINE_BASE_PATH = 'pubmed/baseline'
 MEDLINE_UPDATE_PATH = 'pubmed/updatefiles'
@@ -496,18 +494,8 @@ class NLPAnalysis(beam.DoFn):
         steps_done = []
 
         try:
-            # steps_done.append('DOWNLOADING TEXTBLOB LITE CORPORA')
-            # MIN_CORPORA = [
-            #     'brown',  # Required for FastNPExtractor
-            #     'punkt',  # Required for WordTokenizer
-            #     'wordnet',  # Required for lemmatization
-            #     'averaged_perceptron_tagger',  # Required for NLTKTagger
-            # ]
-            # for each in MIN_CORPORA:
-            #         nltk.download(each)
-            # # nltk.download()
             steps_done.append('STARTING NLPAnalysis')
-            self.nlp = NLPAnalysis._init_spacy_english_language()
+            self.nlp = init_spacy_english_language()
             steps_done.append('STARTING TAGGER')
             self._tagger = BioEntityTagger(partial_match=False)
             self.analyzers = [DocumentAnalysisSpacy(self.nlp, tagger=self._tagger), NounChuncker()]
@@ -519,42 +507,6 @@ class NLPAnalysis(beam.DoFn):
 
         logging.info(steps_done)
 
-    @staticmethod
-    def _create_tokenizer(nlp):
-        infix_re = spacy.util.compile_infix_regex(TOKENIZER_INFIXES + [  # u'\w*[,-.–_—:;\(\)\[\]\{\}/]{1,3}\S\w*',
-            # r'\w*[,\-.\-_:;\(\)\[\]\{\}\/]{1,3}\S\w*',
-            # r'((?P<start_with_non_whitespace_and_one_or_more_punctation>\b\S+|[,.-_:;\(\)\[\]\{\}/\+])(
-            # ?P<has_1_or_more_punctation>[,.-_:;\(\)\[\]\{\}/\+])+(
-            # ?P<ends_with_non_whitespace_or_non_terminating_punctation>\S+\b[,.-_:;\(\)\[\]\{\}/\+]|[,.-_:;\(\)\[
-            # \]\{\}/\+|\-]|\S+\b))',
-            # r'\w*\S-\S*\w',
-            # u'\w*\S–\S*\w',
-            # u'\w*\S—\S*\w',
-            # u'\w*[,-.–_—:;\(\)\[\]\{\}/]{1,3}\S\w*'
-            ur'(?P<start_with_non_whitespace_and_one_or_more_punctation>\b\S*|[,.-_-:–;—\(\[\{/\+]?)('
-            ur'?P<has_1_or_more_punctation>[,.-_-:–;—\(\)\[\]\{\}/\+])+('
-            ur'?P<ends_with_non_whitespace_or_non_terminating_punctation>\S+\b[,.-_-:–;—\)\]\}/\+]|[,'
-            ur'.-_-:–;—\)\]\}/\+}]|\S+\b)'
-        ])
-        # TODO: prefix and suffix raise TypeError: '_regex.Pattern' object is not callable
-        # prefix_boundaries_to_keep =  ur'\) \] \} \> , . - _ - : – ; — \+ -'.split()
-        # suffix_boundaries_to_keep = ur'\( \[ \{ \< , . - _ - : – ; — \+ -'.split()
-        # prefixe_re = spacy.util.compile_prefix_regex([i for i in TOKENIZER_PREFIXES if i not in
-        # prefix_boundaries_to_keep])
-        # suffixe_re = spacy.util.compile_suffix_regex([i for i in TOKENIZER_SUFFIXES if i not in
-        # suffix_boundaries_to_keep])
-        #
-        # return Tokenizer(nlp.vocab, {}, prefixe_re.search, suffixe_re.search,
-        #                  infix_re.finditer)
-        return Tokenizer(nlp.vocab, {}, nlp.tokenizer.prefix_search, nlp.tokenizer.suffix_search,
-                         infix_re.finditer)
-
-    @staticmethod
-    def _init_spacy_english_language():
-        # nlp = en_core_web_md.load(create_make_doc=NLPAnalysis._create_tokenizer)
-        nlp = en_depent_web_md.load(create_make_doc=NLPAnalysis._create_tokenizer)
-        # nlp.vocab.strings.set_frozen(True)
-        return nlp
 
 
 class ToJSON(beam.DoFn):
@@ -568,7 +520,7 @@ class ToJSON(beam.DoFn):
                              )
         except UnicodeDecodeError:
             logging.error('cannot serialize object to json because of non ascii chars')
-            nltk.pprint(element)
+
 
 
 class GetLatestVersion(beam.DoFn):
