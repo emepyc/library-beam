@@ -15,6 +15,21 @@ from modules.vocabulary import vocabulary_urls
 unicode_punctation_table = dict.fromkeys(i for i in xrange(sys.maxunicode)
                                          if unicodedata.category(unichr(i)).startswith('P'))
 
+class Vocabulary(object):
+    def __init__(self,
+                 vocabularydict,
+                 category,
+                 reference_db):
+        """
+
+        :param vocabularydict: a dictionary of format {name: {ids:[id1, id2, ...], pref_name: "pref name"}, ... }
+        :param category: e.g. GENE
+        :param reference_db: OPENTARGETS
+        """
+        self.vocabularydict = vocabularydict
+        self.category = category
+        self.reference_db = reference_db
+
 
 class BioEntityTagger(object):
     separators_all = [' ', '.', ',', ';', ':', ')', ']', '(', '[', '{', '}', '/', '\\', '"', "'", '?', '!', '<', '>',
@@ -23,7 +38,8 @@ class BioEntityTagger(object):
     def __init__(self,
                  partial_match=False,
                  ignorecase=True,
-                 stopwords=None):
+                 stopwords=None,
+                 vocabularies=None):
         '''
 
         :param partial_match:  allow for matching a non clomplete word
@@ -35,24 +51,11 @@ class BioEntityTagger(object):
         self.ignorecase = ignorecase
         if stopwords is None:
             stopwords = DOMAIN_STOP_WORDS
+        if vocabularies is None:
+            self.vocabularies = BioEntityTagger.get_vocabularies(vocabulary_urls)
         idx = 0
-        s = requests.Session()
-        '''get the dictionaries from remote files'''
-        for dictionary_url in vocabulary_urls:
-            max_retry = 3
-            retry = 0
-            while retry < max_retry:
-                dictionary_request = s.get(dictionary_url)
-                if not dictionary_request.ok:
-                    time.sleep(1)
-                    retry += 1
-                else:
-                    break
-            if not dictionary_request.ok:
-                logging.error('cannot download dictionary %s, skipped' % dictionary_url)
-                continue
-            dictionary = dictionary_request.json()
-            category, reference_db = dictionary_url.split('/')[-1].split('.')[0].split('_')[0].split('-')
+        for vocabulary in self.vocabularies:
+            dictionary, category, reference_db = vocabulary.vocabularydict, vocabulary.category, vocabulary.reference_db
             '''load the elements in the Automation if they are not too short or are stopwords'''
             for element, element_data in dictionary.items():
                 ids = element_data['ids']
@@ -100,8 +103,37 @@ class BioEntityTagger(object):
                                                  longest_token,
                                                  pref_name)
 
-        s.close()
+
         self.A.make_automaton()
+
+    @staticmethod
+    def get_vocabularies(vocabulary_url_list):
+        """
+        Yields Vocabulary objects fetched from vocabulary_urls, or None if fetch failed
+        :param vocabulary_url_list: list of e.g. https://storage.googleapis.com/opentargets-vocabularies/HEALTHCARE-MESH.json
+        """
+        max_retry = 3
+
+        s = requests.Session()
+        '''get the dictionaries from remote files'''
+
+        for dictionary_url in vocabulary_url_list:
+            retry = 0
+            while retry < max_retry:
+                dictionary_request = s.get(dictionary_url)
+                if not dictionary_request.ok:
+                    time.sleep(1)
+                    retry += 1
+                else:
+                    break
+            if not dictionary_request.ok:
+                logging.error('cannot download dictionary %s, skipped' % dictionary_url)
+                yield None
+            dictionary = dictionary_request.json()
+            category, reference_db = dictionary_url.split('/')[-1].split('.')[0].split('_')[0].split('-')
+            yield Vocabulary(dictionary, category, reference_db)
+        s.close()
+
 
     def add_tag(self, element_text, idx, category, reference_db, ids, element, match, pref_name):
         unique_resource_key = category + '|' + reference_db
