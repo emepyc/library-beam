@@ -53,6 +53,8 @@ class BioEntityTagger(object):
             stopwords = DOMAIN_STOP_WORDS
         if vocabularies is None:
             self.vocabularies = BioEntityTagger.get_vocabularies(vocabulary_urls)
+        else:
+            self.vocabularies = vocabularies
         idx = 0
         for vocabulary in self.vocabularies:
             dictionary, category, reference_db = vocabulary.vocabularydict, vocabulary.category, vocabulary.reference_db
@@ -102,8 +104,6 @@ class BioEntityTagger(object):
                                                  element,
                                                  longest_token,
                                                  pref_name)
-
-
         self.A.make_automaton()
 
     @staticmethod
