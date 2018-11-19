@@ -25,17 +25,6 @@ warnings.filterwarnings('ignore')
 tmux new-session "python load2es.py publication --es http://myes:9200"
 '''
 
-# load the pubmed ids for chembl:
-fname = 'chembl23_pubmed_ids.csv'
-chembl_pubmed_ids_file = open(fname, 'r')
-chembl_pubmed_ids = chembl_pubmed_ids_file.read().split('\n')
-chembl_pubmed_ids_dict = {}
-for id in chembl_pubmed_ids:
-    chembl_pubmed_ids_dict[id.strip()] = True
-
-#print(chembl_pubmed_ids)
-#print(chembl_pubmed_ids_dict)
-#exit()
 
 # cache_file = '/tmp/load2es_cache.json'
 # INDEX_NAME = 'pubmed-18'
@@ -140,7 +129,7 @@ def read_remote_file(index_, doc_type, file_name, malformed, bucket=None, use_pu
     while counter <= 3:  # retry 3 times
         counter += 1
         try:
-            with NamedTemporaryFile(suffix='.gz') as cache_file:
+            with NamedTemporaryFile(suffix='.gz', delete=False) as cache_file:
                 if bucket is not None:
                     blob = bucket.get_blob(file_name)
                     blob.chunk_size = 262144 * 4
@@ -183,10 +172,6 @@ def read_remote_file(index_, doc_type, file_name, malformed, bucket=None, use_pu
                     # tt = mark_tags_in_text(("abstract:    " + t), m)
                     # print(tt)
                     # exit(0)
-                    if str(line_json["pub_id"]) in chembl_pubmed_ids_dict:
-                        in_chembl += 1
-                        logging.error('ok %s' % str(in_chembl))
-                        #exit()
                     new_line.append(line)
                     if line[-1] == '\n':
                         # counter += 1
