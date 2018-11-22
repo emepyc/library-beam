@@ -44,7 +44,7 @@ index_config = {
              mappings=None,
              pub_id = True),
     'publication':
-        dict(path='_enriched.json.gz',
+        dict(path='*_enriched.json.gz',
              index='pubmed-18',
              doc_type='publication',
              mappings='publication.json',
@@ -113,8 +113,8 @@ def get_next_record(reader):
             yield None
         rec = "".join([rec, line])
         try:
-            line_json = json.loads(rec)
-            yield(rec, line_json)
+            #line_json = json.loads(rec)
+            yield(rec, '')
             rec = ''
         except Exception:
             rec = rec + ' '
@@ -129,7 +129,7 @@ def read_remote_file(index_, doc_type, file_name, malformed, bucket=None, use_pu
     while counter <= 3:  # retry 3 times
         counter += 1
         try:
-            with NamedTemporaryFile(suffix='.gz', delete=False) as cache_file:
+            with NamedTemporaryFile(suffix='.gz', delete=True) as cache_file:
                 if bucket is not None:
                     blob = bucket.get_blob(file_name)
                     blob.chunk_size = 262144 * 4
@@ -218,18 +218,18 @@ def read_remote_file(index_, doc_type, file_name, malformed, bucket=None, use_pu
     #     yield line
 
 
-def get_file_names(path, localdir=None):
+def get_file_names(path, localdir=None,  project=None, bucket=None, bucketfolderpath=None):
     if localdir is None:
-        client = storage.Client(project='siren-pubmed')
-        bucket = client.get_bucket('medline-json')
-        for i in bucket.list_blobs(prefix='splitted/'):
-            if fnmatch(i.name, ('splitted/'+path)):
+        client = storage.Client(project=project)
+        bucket = client.get_bucket(bucket)
+        for i in bucket.list_blobs(prefix=bucketfolderpath):
+            if fnmatch(i.name, (bucketfolderpath+path)):
                 yield i.name
     else:
         # path e.g. _bioentities.json.gz
         for f in listdir(localdir):
             filepath = join(localdir, f)
-            if isfile(filepath) and filepath.endswith(path):
+            if isfile(filepath) and fnmatch(filepath, path):
                 yield filepath
 
 
@@ -243,7 +243,11 @@ if __name__ == '__main__':
                         help='elasticsearch urls')
     parser.add_argument('-username', required=False)
     parser.add_argument('-password',  required=False)
-    parser.add_argument('--localdir', dest='localdir', help='directory with local files')
+    parser.add_argument('-localdir', dest='localdir', help='directory with local files')
+    parser.add_argument('-project', dest='project', help='google cloud project where the source files are stored')
+    parser.add_argument('-bucket', dest='bucket', help='google cloud bucket where the source files are stored')
+    parser.add_argument('-bucketfolderpath', dest='bucketfolderpath', help='path to folder within bucket, e.g. "test/analyzed-nov20/"')
+    parser.add_argument('-deleteindexes', action='store_true', help='delete and recreate indexes')
     args = parser.parse_args()
 
     ES_AUTH = (args.username, args.password)
@@ -275,19 +279,20 @@ if __name__ == '__main__':
         index_data = index_config[idx]
 
         '''prepare es for loading'''
-        tqdm.write('deleting %s %s' % (
-            index_data['index'], es.indices.delete(index=index_data['index'], ignore=404, timeout='300s')))
-        if index_data['mappings']:
-            tqdm.write('creating %s %s' % (
-                index_data['index'], es.indices.create(index=index_data['index'], ignore=400, timeout='30s',
-                                                       body=json.load(open('es-mapping/' + index_data['mappings']))
-                                                       )))
-        else:
-            tqdm.write('creating %s %s' % (
-                index_data['index'], es.indices.create(index=index_data['index'], ignore=400, timeout='30s',
-                                                       )))
+        if args.deleteindexes:
+            tqdm.write('deleting %s %s' % (
+                index_data['index'], es.indices.delete(index=index_data['index'], ignore=404, timeout='300s')))
+            if index_data['mappings']:
+                tqdm.write('creating %s %s' % (
+                    index_data['index'], es.indices.create(index=index_data['index'], ignore=400, timeout='30s',
+                                                           body=json.load(open('es-mapping/' + index_data['mappings']))
+                                                           )))
+            else:
+                tqdm.write('creating %s %s' % (
+                    index_data['index'], es.indices.create(index=index_data['index'], ignore=400, timeout='30s',
+                                                           )))
         time.sleep(3)
-        temp_index_settings = {
+        temp_index_settings = { # to increase performance of bulk indexing
             "index": {
                 "refresh_interval": "-1",
                 "number_of_replicas": 0,
@@ -308,7 +313,8 @@ if __name__ == '__main__':
             if args.localdir:
                 file_names = list(get_file_names(path=index_data['path'], localdir=args.localdir))
             else:
-                file_names = list(get_file_names(path=index_data['path']))
+                file_names = list(get_file_names(path=index_data['path'], project=args.project, bucket=args.bucket,
+                                                 bucketfolderpath=args.bucketfolderpath))
             chunk_size = 1000
             file_pbar = tqdm(file_names,
                                   desc='files processed',
@@ -321,8 +327,8 @@ if __name__ == '__main__':
                 if args.localdir:
                     loaded_rows = read_remote_file(index_data['index'], index_data['doc_type'], file_name, malformed, use_pub_id =index_data['pub_id'])
                 else:
-                    client = storage.Client(project='open-targets')
-                    bucket = client.get_bucket('medline-json')
+                    client = storage.Client(project=args.project)
+                    bucket = client.get_bucket(args.bucket)
                     loaded_rows = read_remote_file(index_data['index'], index_data['doc_type'], file_name, malformed, bucket=bucket , use_pub_id = index_data['pub_id'])
                 counter = 0
 
